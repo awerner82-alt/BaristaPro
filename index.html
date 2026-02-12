@@ -12,6 +12,10 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
     <!-- Babel für TSX Support im Browser -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Process Shim für Browser-Umgebung -->
+    <script>
+      window.process = { env: { API_KEY: '' } };
+    </script>
     <style>
         body {
             font-family: 'Inter', sans-serif;

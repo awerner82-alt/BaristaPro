@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { EspressoShot, DialInAdvice, CoffeeSearchRecommendation } from './types.ts';
 import { getBaristaAdvice, searchCoffeeParameters } from './services/geminiService.ts';
@@ -13,7 +12,7 @@ declare global {
     openSelectKey: () => Promise<void>;
   }
   interface Window {
-    aistudio: AIStudio;
+    aistudio?: AIStudio;
   }
 }
 
