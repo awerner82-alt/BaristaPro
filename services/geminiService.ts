@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { EspressoShot, DialInAdvice, CoffeeSearchRecommendation } from "../types";
+import { EspressoShot, DialInAdvice, CoffeeSearchRecommendation } from "../types.ts";
 
 export const searchCoffeeParameters = async (query: string): Promise<CoffeeSearchRecommendation> => {
   // Wir erstellen die Instanz erst beim Aufruf, um sicherzustellen, dass der aktuellste Key genutzt wird

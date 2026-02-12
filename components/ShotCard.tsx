@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { EspressoShot } from '../types';
+import { EspressoShot } from '../types.ts';
 
 interface ShotCardProps {
   shot: EspressoShot;

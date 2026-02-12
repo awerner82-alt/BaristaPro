@@ -1,20 +1,19 @@
 
 import React, { useState, useEffect } from 'react';
-import { EspressoShot, DialInAdvice, CoffeeSearchRecommendation } from './types';
-import { getBaristaAdvice, searchCoffeeParameters } from './services/geminiService';
-import { ShotCard } from './components/ShotCard';
-import { ShotTimer } from './components/ShotTimer';
+import { EspressoShot, DialInAdvice, CoffeeSearchRecommendation } from './types.ts';
+import { getBaristaAdvice, searchCoffeeParameters } from './services/geminiService.ts';
+import { ShotCard } from './components/ShotCard.tsx';
+import { ShotTimer } from './components/ShotTimer.tsx';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 // Erweiterung des Window-Interfaces für AI Studio Funktionen
-// Fix: All declarations of 'aistudio' must have identical modifiers and types.
 declare global {
   interface AIStudio {
     hasSelectedApiKey: () => Promise<boolean>;
     openSelectKey: () => Promise<void>;
   }
   interface Window {
-    readonly aistudio: AIStudio;
+    aistudio: AIStudio;
   }
 }
 
