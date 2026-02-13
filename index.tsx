@@ -53,13 +53,13 @@ declare global {
 
 // --- SERVICES ---
 const getApiKey = () => {
-  // Versuche Key aus window.process (Shim) oder localStorage zu holen
-  return window.process?.env?.API_KEY || localStorage.getItem('GEMINI_API_KEY') || '';
+  // Priorität: 1. LocalStorage (User Input), 2. Process Env (Shim/Build)
+  return localStorage.getItem('GEMINI_API_KEY') || window.process?.env?.API_KEY || '';
 };
 
 const searchCoffeeParameters = async (query: string): Promise<CoffeeSearchRecommendation> => {
   const apiKey = getApiKey();
-  if (!apiKey) throw new Error("Kein API Key vorhanden");
+  if (!apiKey) throw new Error("Kein API Key vorhanden. Bitte Setup durchführen.");
 
   const ai = new GoogleGenAI({ apiKey });
   
@@ -95,7 +95,7 @@ const searchCoffeeParameters = async (query: string): Promise<CoffeeSearchRecomm
       }))
       .filter((s: any) => s.uri) || [];
 
-    // Robustere JSON Extraktion (entfernt Markdown Code Blocks ```json ... ```)
+    // Robustere JSON Extraktion
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
         console.warn("Kein JSON im Response gefunden:", text);
@@ -362,9 +362,11 @@ const App: React.FC = () => {
   const [advice, setAdvice] = useState<DialInAdvice | null>(null);
   const [error, setError] = useState<string | null>(null);
   
-  // Neuer State für den API Key
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('GEMINI_API_KEY') || '');
-  const [showKeyInput, setShowKeyInput] = useState(false);
+  // State für den API Key
+  const storedKey = localStorage.getItem('GEMINI_API_KEY');
+  const [apiKey, setApiKey] = useState(storedKey || '');
+  // Wenn kein Key da ist, starte direkt mit dem Setup Screen (kein Flash)
+  const [showKeyInput, setShowKeyInput] = useState(!storedKey);
   
   const [isAdding, setIsAdding] = useState(false);
   const [searchStep, setSearchStep] = useState(true);
@@ -390,20 +392,21 @@ const App: React.FC = () => {
     }
   }, [apiKey]);
 
-  // Check if we need to show key input (only if no window.aistudio and no local key)
+  // Zusätzlicher Check für AI Studio Environment (optional)
   useEffect(() => {
-    const checkKey = async () => {
-      let hasKey = !!apiKey;
-      if (!hasKey && window.aistudio) {
-        hasKey = await window.aistudio.hasSelectedApiKey();
-      }
-      
-      if (!hasKey) {
-        setShowKeyInput(true);
+    const checkAIStudio = async () => {
+      if (!apiKey && window.aistudio) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        if (hasKey) {
+            // Wenn AI Studio Key hat, brauchen wir keinen lokalen Key erzwingen, 
+            // da process.env automatisch injected wird in AI Studio Umgebung.
+            // Aber hier speichern wir ihn der Konsistenz halber nicht ab, sondern verstecken nur das Input Feld.
+            setShowKeyInput(false);
+        }
       }
     };
-    checkKey();
-  }, []);
+    checkAIStudio();
+  }, [apiKey]);
 
   useEffect(() => {
     const saved = localStorage.getItem('barista_shots_v3');
@@ -415,6 +418,7 @@ const App: React.FC = () => {
   }, [shots]);
 
   const saveApiKey = (key: string) => {
+    if (!key.trim()) return;
     localStorage.setItem('GEMINI_API_KEY', key);
     setApiKey(key);
     setShowKeyInput(false);
@@ -428,15 +432,15 @@ const App: React.FC = () => {
     setIsSearching(true);
 
     try {
-      if (window.aistudio) {
-        const hasKey = await window.aistudio.hasSelectedApiKey();
-        if (!hasKey) {
-          await window.aistudio.openSelectKey();
-        }
-      } else if (!apiKey) {
+      if (!apiKey && !window.aistudio) {
         setShowKeyInput(true);
         setIsSearching(false);
         return;
+      }
+      // AI Studio Check Fallback
+      if (window.aistudio) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        if (!hasKey) await window.aistudio.openSelectKey();
       }
 
       const rec = await searchCoffeeParameters(searchQuery);
@@ -513,36 +517,49 @@ const App: React.FC = () => {
     }));
   };
 
+  // --- API KEY SETUP SCREEN ---
   if (showKeyInput) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center p-6">
-        <div className="bg-[#111] p-8 rounded-[2rem] border border-amber-500/20 max-w-md w-full shadow-2xl">
-          <div className="w-16 h-16 bg-amber-500/10 rounded-2xl flex items-center justify-center mb-6 mx-auto">
-             <svg className="w-8 h-8 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
+      <div className="min-h-screen bg-black flex items-center justify-center p-6 animate-in fade-in duration-500">
+        <div className="bg-[#111] p-8 rounded-[2.5rem] border border-amber-500/20 max-w-md w-full shadow-2xl relative overflow-hidden">
+          {/* Background decoration */}
+          <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full blur-3xl -mr-10 -mt-10"></div>
+          
+          <div className="w-16 h-16 bg-gradient-to-br from-amber-400 to-amber-600 rounded-2xl flex items-center justify-center mb-6 mx-auto shadow-lg shadow-amber-500/20">
+             <svg className="w-8 h-8 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
           </div>
-          <h2 className="text-2xl font-bold text-white text-center mb-2 font-serif">Setup Required</h2>
-          <p className="text-slate-500 text-center text-sm mb-8">Gib deinen Google Gemini API Key ein, um den Barista Coach zu nutzen. Der Key wird nur lokal in deinem Browser gespeichert.</p>
+          <h2 className="text-3xl font-bold text-white text-center mb-2 font-serif tracking-tight">Setup Required</h2>
+          <p className="text-slate-400 text-center text-sm mb-8 leading-relaxed">
+            Für den Barista-Coach benötigen wir deinen <span className="text-amber-500 font-bold">Google Gemini API Key</span>.<br/>
+            <span className="text-xs text-slate-600 block mt-2">Der Key wird sicher lokal in deinem Browser gespeichert.</span>
+          </p>
           
           <form onSubmit={(e) => {
             e.preventDefault();
             const val = (e.currentTarget.elements.namedItem('key') as HTMLInputElement).value;
-            if(val) saveApiKey(val);
-          }} className="space-y-4">
-            <input 
-              name="key"
-              type="password" 
-              placeholder="Paste Gemini API Key here..." 
-              className="w-full bg-black/50 border border-white/10 rounded-xl p-4 text-white focus:border-amber-500 outline-none transition-colors"
-              autoFocus
-            />
-            <button type="submit" className="w-full bg-amber-500 text-black font-bold py-4 rounded-xl hover:bg-amber-600 transition-colors">
+            saveApiKey(val);
+          }} className="space-y-5">
+            <div className="relative group">
+              <input 
+                name="key"
+                type="password" 
+                placeholder="Gemini API Key einfügen..." 
+                className="w-full bg-black/40 border border-white/10 rounded-2xl p-5 text-white focus:border-amber-500/50 outline-none transition-all placeholder:text-slate-700 text-center font-mono text-sm group-focus-within:bg-black/60"
+                autoFocus
+                autoComplete="off"
+              />
+            </div>
+            <button type="submit" className="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-5 rounded-2xl shadow-xl transition-all active:scale-95 text-lg">
               Speichern & Starten
             </button>
-            <p className="text-center mt-4">
-              <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-[10px] text-slate-500 hover:text-amber-500 underline uppercase tracking-widest font-bold">
-                Get API Key
+            
+            <div className="pt-4 text-center border-t border-white/5">
+              <p className="text-xs text-slate-500 mb-2">Noch kein Key?</p>
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-[10px] bg-white/5 hover:bg-white/10 text-slate-300 px-4 py-2 rounded-full uppercase tracking-widest font-bold transition-colors">
+                <span>Key erstellen</span>
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
               </a>
-            </p>
+            </div>
           </form>
         </div>
       </div>
@@ -798,7 +815,7 @@ const App: React.FC = () => {
                         onClick={startNewCoffee}
                         className="flex-1 bg-amber-500 hover:bg-amber-600 text-black font-bold py-4 rounded-2xl transition-all active:scale-95 flex items-center justify-center gap-2 text-sm"
                       >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                         Andere Sorte
                       </button>
                     </div>
