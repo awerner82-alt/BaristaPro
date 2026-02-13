@@ -44,11 +44,27 @@ interface CoffeeSearchRecommendation {
   sources: { title: string; uri: string }[];
 }
 
+// Globaler Zugriff auf Process für den API Key Shim
+declare global {
+  interface Window {
+    process: { env: { API_KEY: string } };
+  }
+}
+
 // --- SERVICES ---
+const getApiKey = () => {
+  // Versuche Key aus window.process (Shim) oder localStorage zu holen
+  return window.process?.env?.API_KEY || localStorage.getItem('GEMINI_API_KEY') || '';
+};
+
 const searchCoffeeParameters = async (query: string): Promise<CoffeeSearchRecommendation> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("Kein API Key vorhanden");
+
+  const ai = new GoogleGenAI({ apiKey });
   
   const prompt = `Suche nach Brühparametern (Brew Guide) für diesen Kaffee: "${query}". 
+  Priorisiere Quellen von Röstern oder Foren wie Kaffee-Netz/Home-Barista.
   Antworte ausschließlich in folgendem JSON-Format:
   {
     "found": boolean,
@@ -57,7 +73,7 @@ const searchCoffeeParameters = async (query: string): Promise<CoffeeSearchRecomm
     "time": number,
     "temperature": "string",
     "maraXSetting": "0" | "I" | "II",
-    "description": "string"
+    "description": "Kurze Zusammenfassung auf Deutsch"
   }
   Falls es eine Lelit Mara X spezifische Empfehlung gibt, nenne die PID-Stufe (0, I, II). Wenn nichts gefunden wird, setze 'found' auf false.`;
 
@@ -67,11 +83,11 @@ const searchCoffeeParameters = async (query: string): Promise<CoffeeSearchRecomm
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
-        systemInstruction: "Du bist ein Barista-Experte. Suche online nach Rezepten. Antworte in validem JSON.",
+        systemInstruction: "Du bist ein Barista-Experte. Antworte immer mit validem JSON. Ignoriere Markdown Formatierung im Output.",
       },
     });
 
-    const text = response.text;
+    const text = response.text || "";
     const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks
       ?.map((chunk: any) => ({
         title: chunk.web?.title || "Quelle",
@@ -79,21 +95,32 @@ const searchCoffeeParameters = async (query: string): Promise<CoffeeSearchRecomm
       }))
       .filter((s: any) => s.uri) || [];
 
+    // Robustere JSON Extraktion (entfernt Markdown Code Blocks ```json ... ```)
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    const jsonData = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
-
-    if (jsonData) {
-      return { ...jsonData, sources };
+    if (!jsonMatch) {
+        console.warn("Kein JSON im Response gefunden:", text);
+        return { found: false, sources, description: "Konnte Antwort nicht lesen." };
     }
-    return { found: false, sources };
+
+    try {
+        const jsonData = JSON.parse(jsonMatch[0]);
+        return { ...jsonData, sources };
+    } catch (e) {
+        console.error("JSON Parse Error:", e);
+        return { found: false, sources, description: "Fehler beim Verarbeiten der Daten." };
+    }
+
   } catch (e) {
     console.error("Search API Error:", e);
-    return { found: false, sources: [] };
+    return { found: false, sources: [], description: "API Fehler: " + (e as Error).message };
   }
 };
 
 const getBaristaAdvice = async (shot: EspressoShot): Promise<DialInAdvice> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("Kein API Key vorhanden");
+
+  const ai = new GoogleGenAI({ apiKey });
   
   const prompt = `
     Analysiere diesen Espresso-Shot basierend auf folgendem Setup:
@@ -335,6 +362,10 @@ const App: React.FC = () => {
   const [advice, setAdvice] = useState<DialInAdvice | null>(null);
   const [error, setError] = useState<string | null>(null);
   
+  // Neuer State für den API Key
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('GEMINI_API_KEY') || '');
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  
   const [isAdding, setIsAdding] = useState(false);
   const [searchStep, setSearchStep] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -352,6 +383,28 @@ const App: React.FC = () => {
     flavorProfile: { sourness: 3, bitterness: 3, body: 3, sweetness: 3, overall: 3 }
   });
 
+  // Sync API Key to Shim
+  useEffect(() => {
+    if (apiKey && window.process && window.process.env) {
+      window.process.env.API_KEY = apiKey;
+    }
+  }, [apiKey]);
+
+  // Check if we need to show key input (only if no window.aistudio and no local key)
+  useEffect(() => {
+    const checkKey = async () => {
+      let hasKey = !!apiKey;
+      if (!hasKey && window.aistudio) {
+        hasKey = await window.aistudio.hasSelectedApiKey();
+      }
+      
+      if (!hasKey) {
+        setShowKeyInput(true);
+      }
+    };
+    checkKey();
+  }, []);
+
   useEffect(() => {
     const saved = localStorage.getItem('barista_shots_v3');
     if (saved) setShots(JSON.parse(saved));
@@ -360,6 +413,12 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('barista_shots_v3', JSON.stringify(shots));
   }, [shots]);
+
+  const saveApiKey = (key: string) => {
+    localStorage.setItem('GEMINI_API_KEY', key);
+    setApiKey(key);
+    setShowKeyInput(false);
+  };
 
   const handleStartSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -374,15 +433,19 @@ const App: React.FC = () => {
         if (!hasKey) {
           await window.aistudio.openSelectKey();
         }
+      } else if (!apiKey) {
+        setShowKeyInput(true);
+        setIsSearching(false);
+        return;
       }
 
       const rec = await searchCoffeeParameters(searchQuery);
       if (!rec.found && rec.sources.length === 0) {
-        setError("Suche war nicht erfolgreich. Prüfe deine Verbindung.");
+        setError(rec.description || "Suche war nicht erfolgreich.");
       }
       setSearchRecommendation(rec);
     } catch (err: any) {
-      setError("Verbindung zum Barista-Coach fehlgeschlagen.");
+      setError("Verbindung fehlgeschlagen. Prüfe deinen API Key.");
       console.error(err);
     } finally {
       setIsSearching(false);
@@ -421,7 +484,7 @@ const App: React.FC = () => {
       const aiAdvice = await getBaristaAdvice(newShot);
       setAdvice(aiAdvice);
     } catch (err) {
-      setError("Analyse-Fehler. Shot wurde lokal gespeichert.");
+      setError("Analyse-Fehler. Prüfe deinen API Key.");
     } finally {
       setLoadingAdvice(false);
     }
@@ -450,6 +513,42 @@ const App: React.FC = () => {
     }));
   };
 
+  if (showKeyInput) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center p-6">
+        <div className="bg-[#111] p-8 rounded-[2rem] border border-amber-500/20 max-w-md w-full shadow-2xl">
+          <div className="w-16 h-16 bg-amber-500/10 rounded-2xl flex items-center justify-center mb-6 mx-auto">
+             <svg className="w-8 h-8 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
+          </div>
+          <h2 className="text-2xl font-bold text-white text-center mb-2 font-serif">Setup Required</h2>
+          <p className="text-slate-500 text-center text-sm mb-8">Gib deinen Google Gemini API Key ein, um den Barista Coach zu nutzen. Der Key wird nur lokal in deinem Browser gespeichert.</p>
+          
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            const val = (e.currentTarget.elements.namedItem('key') as HTMLInputElement).value;
+            if(val) saveApiKey(val);
+          }} className="space-y-4">
+            <input 
+              name="key"
+              type="password" 
+              placeholder="Paste Gemini API Key here..." 
+              className="w-full bg-black/50 border border-white/10 rounded-xl p-4 text-white focus:border-amber-500 outline-none transition-colors"
+              autoFocus
+            />
+            <button type="submit" className="w-full bg-amber-500 text-black font-bold py-4 rounded-xl hover:bg-amber-600 transition-colors">
+              Speichern & Starten
+            </button>
+            <p className="text-center mt-4">
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-[10px] text-slate-500 hover:text-amber-500 underline uppercase tracking-widest font-bold">
+                Get API Key
+              </a>
+            </p>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-black text-slate-200 pb-20 md:pb-0">
       <header className="sticky top-0 z-50 bg-black/60 backdrop-blur-xl border-b border-white/5 px-4 md:px-6 py-4 flex justify-between items-center safe-top">
@@ -459,7 +558,7 @@ const App: React.FC = () => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
              </svg>
           </div>
-          <div>
+          <div onClick={() => setShowKeyInput(true)} className="cursor-pointer">
             <h1 className="text-xl font-bold text-white italic leading-none font-serif tracking-tight">BaristaPro</h1>
             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.2em] mt-1">Mara X • VS3</p>
           </div>
@@ -553,7 +652,7 @@ const App: React.FC = () => {
                           </div>
                         ) : (
                           <div className="bg-white/5 border border-white/10 rounded-2xl p-6 text-center">
-                            <p className="text-slate-400 text-sm">Kein spezifisches Rezept gefunden. <br/><span className="text-amber-500/70">Nutze Standard-Setup (1:2 Ratio).</span></p>
+                            <p className="text-slate-400 text-sm">{searchRecommendation.description || "Kein spezifisches Rezept gefunden."} <br/><span className="text-amber-500/70">Nutze Standard-Setup (1:2 Ratio).</span></p>
                           </div>
                         )}
                         <button 
